@@ -136,6 +136,8 @@ class USBBridge(QObject):
             if kind == "start":
                 self.start_timer.stop()
                 self.last_seq = None
+                self.sequence_streak = [0, 0]
+                self.sequence_indices = set()
                 self.logged_audio = False
                 self.gaps = 0
                 self.audio_frames = 0
@@ -157,7 +159,19 @@ class USBBridge(QObject):
                     raise ValueError("遥控器音频包不完整")
                 self.inactivity_timer.start()
                 seq = tuple(int.from_bytes(packet[n:n+4], "little") for n in (46, 50))
-                if self.last_seq and any(b != (a+1) & 0xffffffff for a, b in zip(self.last_seq, seq)):
+                gap = False
+                if self.last_seq:
+                    advanced = [b == (a + 1) & 0xffffffff for a, b in zip(self.last_seq, seq)]
+                    if event.get("hid_variant"):
+                        # Only enforce fields that behave like sequence counters.
+                        for index, follows in enumerate(advanced):
+                            self.sequence_streak[index] = self.sequence_streak[index] + 1 if follows else 0
+                            if self.sequence_streak[index] >= 3:
+                                self.sequence_indices.add(index)
+                        gap = any(not advanced[index] for index in self.sequence_indices)
+                    else:
+                        gap = not all(advanced)
+                if gap:
                     # A single dropped frame is a transport hiccup, not a reason
                     # to end the take: never fabricate samples, just resync and
                     # report. Only a burst of gaps means the link is broken.

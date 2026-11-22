@@ -20,6 +20,9 @@ KEY_INTERFACES = (1, 4)          # consumer control, keyboard
 MOUSE_INTERFACE = 2              # claimed only so the pointer stays put
 READ_ENDPOINT = 0x84
 WRITE_ENDPOINT = 0x05
+HID_VOICE_IN = 0x82
+HID_VOICE_OUT = 0x03
+HID_VOICE_START_DELAY = 0.15
 # Audio stops as soon as the key is released; a short gap ends the session even
 # if the GUI never sees the key-up event.
 RELEASE_GAP = 0.45
@@ -27,6 +30,18 @@ RELEASE_GAP = 0.45
 
 def _frame(*prefix):
     return bytes(prefix) + bytes(64 - len(prefix))
+
+
+def voice_endpoints(interface):
+    endpoints = {endpoint.bEndpointAddress: endpoint for endpoint in interface}
+    if READ_ENDPOINT in endpoints and WRITE_ENDPOINT in endpoints:
+        return endpoints[READ_ENDPOINT], endpoints[WRITE_ENDPOINT], False
+    if interface.bInterfaceClass == 3 and HID_VOICE_IN in endpoints and HID_VOICE_OUT in endpoints:
+        reader, writer = endpoints[HID_VOICE_IN], endpoints[HID_VOICE_OUT]
+        if all(endpoint.bmAttributes & 3 == 3 and endpoint.wMaxPacketSize == 64
+               for endpoint in (reader, writer)):
+            return reader, writer, True
+    raise ValueError("Unsupported USB voice endpoint layout")
 
 
 class WindowsCollector(QObject):
@@ -250,7 +265,7 @@ class WindowsCollector(QObject):
             interface = device.get_active_configuration()[(VOICE_INTERFACE, 0)]
             usb.util.claim_interface(device, VOICE_INTERFACE)
             voice_claimed = True
-            reader = next(e for e in interface if e.bEndpointAddress == READ_ENDPOINT)
+            reader, writer, hid_voice = voice_endpoints(interface)
             self._log("interface 3 claimed")
             readers = self._claim_keys(device)
         except Exception as exc:
@@ -283,13 +298,33 @@ class WindowsCollector(QObject):
 
         def command(*prefix):
             try:
-                device.write(WRITE_ENDPOINT, _frame(*prefix), timeout=1000)
+                payload = _frame(*prefix)
+                if writer.write(payload, timeout=1000) != len(payload):
+                    raise IOError("Incomplete voice command")
             except Exception as exc:
                 self._log(f"command {bytes(prefix).hex()} failed: {exc}")
                 raise
             self._log(f"out {bytes(prefix).hex()} phase={phase}")
 
+        def begin_handshake(now):
+            nonlocal phase, deadline, enter_at
+            command(1, 0x82, 1, 0)
+            command(1, 8, 1, 0)
+            phase = 1
+            deadline = now + 8
+            enter_at = now + HID_VOICE_START_DELAY
+
+        def begin_stream(now):
+            nonlocal phase, session_start, last_audio, keepalive, deadline
+            phase = 3
+            session_start = now
+            last_audio = 0.0
+            keepalive = 0.0
+            deadline = now + 60
+            self._emit({"type": "start"})
+
         phase = 0
+        enter_at = 0.0
         keepalive = 0.0
         deadline = 0.0
         stop_deadline = 0.0
@@ -310,10 +345,7 @@ class WindowsCollector(QObject):
                 if request is not None:
                     self._log(f"request {'start' if request else 'stop'} phase={phase}")
                 if request is True and phase == 0:
-                    command(1, 0x82, 1, 0)
-                    command(1, 8, 1, 0)
-                    phase = 1
-                    deadline = now + 8
+                    begin_handshake(now)
                 elif request is False and phase:
                     command(1, 0, 0)
                     phase = 4
@@ -331,6 +363,8 @@ class WindowsCollector(QObject):
                     self._log(f"in {data[:4].hex()}")
                 if data:
                     if data[:2] == b"\x01\x81":
+                        if hid_voice and phase in (1, 2) and len(data) == 64:
+                            begin_stream(now)
                         last_audio = now
                         if phase == 4 and not alternate_sent and now - stop_sent_at > 0.2:
                             # Audio after a stop means the first command did not
@@ -338,8 +372,8 @@ class WindowsCollector(QObject):
                             alternate_sent = True
                             self._log("audio after stop; sending alternate stop")
                             command(1, 1, 0, 0)
-                        if phase >= 3:
-                            self._emit({"type": "audio", "hex": data.hex()})
+                        if phase == 3 or (phase == 4 and not hid_voice):
+                            self._emit({"type": "audio", "hex": data.hex(), "hid_variant": hid_voice})
                     elif (
                         (data[:2] == b"\x01\x86" and (len(data) < 3 or data[2] != 0))
                         or data[:3] == b"\x01\x82\x03"
@@ -347,10 +381,7 @@ class WindowsCollector(QObject):
                         # The receiver announces the voice key itself; this works
                         # even when Raw Input is unavailable to the GUI.
                         self._log("voice key frame from receiver")
-                        command(1, 0x82, 1, 0)
-                        command(1, 8, 1, 0)
-                        phase = 1
-                        deadline = now + 8
+                        begin_handshake(now)
                     elif data[:3] == b"\x01\x86\x00" and phase and phase != 4:
                         self._log("remote ended voice session")
                         command(1, 0, 0)
@@ -366,12 +397,11 @@ class WindowsCollector(QObject):
                         command(1, 1, 1, 0)
                         phase = 2
                     elif data[:4] == b"\x01\x01\x01\x00" and phase == 2:
-                        phase = 3
-                        session_start = now
-                        last_audio = 0.0
-                        keepalive = 0
-                        deadline = now + 60
-                        self._emit({"type": "start"})
+                        begin_stream(now)
+                if hid_voice and phase == 1 and now >= enter_at:
+                    # This layout can start streaming without the ready or start echo.
+                    command(1, 1, 1, 0)
+                    phase = 2
                 if phase == 4 and now >= stop_deadline:
                     phase = 0
                 if phase == 3 and not last_audio and now - session_start > 2.0:
@@ -407,7 +437,7 @@ class WindowsCollector(QObject):
                 # Leaving the receiver mid-session keeps the remote's LED on and
                 # blocks the next press; always close it explicitly.
                 try:
-                    device.write(WRITE_ENDPOINT, _frame(1, 0, 0), timeout=1000)
+                    command(1, 0, 0)
                 except Exception:
                     pass
             self._release_device(device, usb.util, voice_claimed)
