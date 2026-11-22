@@ -501,3 +501,19 @@ def test_add_dialog_offers_takeover_for_any_picked_usb_device(qtbot, monkeypatch
     dialog.unlisted_box.setCurrentIndex(dialog.unlisted_box.findText("U 盘", Qt.MatchFlag.MatchStartsWith))
     assert not dialog.receiver_bind.isVisibleTo(dialog) and "没有 App 能接管" in dialog.receiver_note.text()
     dialog.close()
+
+
+def test_parse_usb_vid_pid_accepts_composite_mi_interfaces_and_enrollment_help_matches_button():
+    from remotehub.enrollment import driver_help_text
+
+    # Regression for v0.3.0 bug: windows_probe_metadata._usb_pair() intentionally rejects &MI_XX,
+    # so win_usb_driver must parse VID:PID from composite interfaces directly.
+    assert drv._parse_usb_vid_pid(r"USB\VID_0416&PID_0602&MI_03\7&2222&0&0003") == (0x0416, 0x0602)
+    assert drv._parse_usb_vid_pid(r"USB\VID_0416&PID_0602&MI_04\7&2222&0&0004") == (0x0416, 0x0602)
+    assert drv._parse_usb_vid_pid(r"USB\VID_0416&PID_0602\6&1111&0&1") == (0x0416, 0x0602)
+    assert drv._parse_usb_vid_pid(r"USB\VID_0BDA&PID_8771\00E04C239987") == (0x0BDA, 0x8771)
+    assert drv._parse_usb_vid_pid(r"HID\VID_0416&PID_0602&MI_04\8&1&0&0000") is None
+
+    win_help = driver_help_text("Windows")
+    assert "让 App 接管这个接收器" in win_help
+    assert "一键启用专用接收器" not in win_help

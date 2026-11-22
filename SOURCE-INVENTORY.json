@@ -7,7 +7,7 @@
     },
     {
       "path": "CHANGELOG.md",
-      "sha256": "4813d4ddcf9ef578d8e5f1907f1fa078681eb7e7fc56b1a226a73804b70f93f0"
+      "sha256": "9dff7438da4c56940c75b5025a242d97bcd631093cb45f021c70de9a0b1d8f22"
     },
     {
       "path": "CONTRIBUTING.md",
@@ -23,7 +23,7 @@
     },
     {
       "path": "SKILL.md",
-      "sha256": "4aa55f7e20fbd6372e063bbd2f18629753e3fc53e22fcbf3cfa792de45a3c77d"
+      "sha256": "2488aeaef705cfe52b440a8fccf752f50eea5b6c36808a21db925756dc5bab46"
     },
     {
       "path": "desktop/ARCHITECTURE.md",
@@ -39,7 +39,7 @@
     },
     {
       "path": "desktop/INSTALL-Windows.md",
-      "sha256": "263115f242c261bd5db5ae810f4a8a769f17544a917c91689f794128c47c509d"
+      "sha256": "06c1ccfcd31270ea305150592329d264fd4c6e419af8bda3fc782eef4ac55ce6"
     },
     {
       "path": "desktop/INSTALL-macOS.md",
@@ -63,7 +63,7 @@
     },
     {
       "path": "desktop/VERSION",
-      "sha256": "d915cc95d6ca8f47ae297713ed46d4e5c5d99ddd29fc3c61e263bdf305f2b5b0"
+      "sha256": "79e3f22ca37c7fdf4c29ae3648d6b008c3cb6547260a453409275470919dc674"
     },
     {
       "path": "desktop/assets/dmg/background.png",
@@ -295,11 +295,11 @@
     },
     {
       "path": "desktop/pyproject.toml",
-      "sha256": "67052e72f8944d70341308d0bec6b26ed63dd30b888ddea68f200253b65747be"
+      "sha256": "81f75af5a93bbdd46396e037e621e42683a29ff9a582404080829345d5d290c7"
     },
     {
       "path": "desktop/remotehub/__init__.py",
-      "sha256": "f851868955ad97ceb472dbd99863f943db67df1cb7b7a37cdaee924d41a6fd49"
+      "sha256": "134bb18dfa3d099a9c94459c1afa0338b38233a98a7ed71da254349e1114a6e0"
     },
     {
       "path": "desktop/remotehub/__main__.py",
@@ -499,7 +499,7 @@
     },
     {
       "path": "desktop/remotehub/enrollment.py",
-      "sha256": "e8e7db7cb03e78d0e43f2e6ef1d3d62b4d65c3e6c93519221320e016f1ba03e5"
+      "sha256": "27115a6bb95c8bfae8c15ede770c73aec21adaab03ae05fca9a57c26062a471e"
     },
     {
       "path": "desktop/remotehub/gestures.py",
@@ -687,7 +687,7 @@
     },
     {
       "path": "desktop/remotehub/ui/general.py",
-      "sha256": "1474a9d2664a079d0da59bcf46e3a38ad997354970484fa8306d3163a4c18a39"
+      "sha256": "f0310c957a9e1f6fb5ff905fe96022aa0106abf6e42b4aab0f76cefab196ccb7"
     },
     {
       "path": "desktop/remotehub/ui/grid_editor.py",
@@ -747,7 +747,7 @@
     },
     {
       "path": "desktop/remotehub/ui/setup_checklist.py",
-      "sha256": "34eb456306fbe9148ae48cbde9f319208a906ca91cc1aeb5705339cc73349c2d"
+      "sha256": "7a33169359794f8dbbd1758af6d94ead90177a43bb417ecc2dd48f7645d7c3e2"
     },
     {
       "path": "desktop/remotehub/ui/sidebar.py",
@@ -799,7 +799,7 @@
     },
     {
       "path": "desktop/remotehub/win_usb_driver.py",
-      "sha256": "6e645d8d24adaf161bd93b24eb89cebbac5e6a1512df7e857566e604b4f8f09c"
+      "sha256": "ec1276a5b7f767267fb582e939af36ae2c85a5b367dc496c9ef9c82c06e62ee5"
     },
     {
       "path": "desktop/remotehub/windows.py",
@@ -1331,7 +1331,7 @@
     },
     {
       "path": "desktop/tests/test_setup_checklist.py",
-      "sha256": "0b153029bda40f807bc8b53614701ff81ccf01e5734bc55f48b7e1068febd425"
+      "sha256": "44f48cc9d548f9b5c27e904cf40715c6c112757d19415090d8d4f2c55c9d70ff"
     },
     {
       "path": "desktop/tests/test_spec_cli.py",
@@ -1391,7 +1391,7 @@
     },
     {
       "path": "desktop/tests/test_win_usb_driver.py",
-      "sha256": "03b7a59554e35d25c1ecc47c62508defac3937c4803ec9bfafe6fb634be84754"
+      "sha256": "0bab33d237ccf1016bbc500ee6a19f6cebe33dfd5848c20a62a7d0623114cec3"
     },
     {
       "path": "desktop/tests/test_win_window_state.py",

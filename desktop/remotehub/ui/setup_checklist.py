@@ -43,7 +43,20 @@ def _mac_component_installed() -> bool:
         return False
 
 
+def _windows_0416_interfaces():
+    """Live present WinUSB-manageable interfaces for the bundled 0416:0602 receiver."""
+    try:
+        from .. import win_usb_driver
+        _, receivers = win_usb_driver.list_managed_devices()
+        return win_usb_driver.receiver_interfaces(receivers, 0x0416, 0x0602)
+    except Exception:
+        return []
+
+
 def _windows_keys_taken_over() -> bool:
+    live = _windows_0416_interfaces()
+    if live:
+        return all(d.bound_winusb for d in live)
     try:
         from ..windows_driver import binding_detail
         return binding_detail().get("keyboard") == "winusb"
@@ -51,7 +64,13 @@ def _windows_keys_taken_over() -> bool:
         return False
 
 
-def setup_items(c, navigate: Callable[[str], None]) -> list[SetupItem]:
+def setup_items(
+    c,
+    navigate: Callable[[str], None],
+    *,
+    run_takeover: Callable[[], None] | None = None,
+    takeover_busy: bool = False,
+) -> list[SetupItem]:
     """Items for the current remote on this platform, required ones first."""
     platform = sys.platform
     receiver = c.uses_receiver
@@ -86,11 +105,19 @@ def setup_items(c, navigate: Callable[[str], None]) -> list[SetupItem]:
     elif platform == "win32":
         if receiver:
             done = _windows_keys_taken_over()
+            if takeover_busy:
+                status, action, run = "正在接管…", "正在接管…", None
+            elif done:
+                status, action, run = "已接管", "", None
+            else:
+                status = "可稍后"
+                action = "让 App 接管这个接收器"
+                run = run_takeover if run_takeover is not None else (lambda: navigate(SETTINGS))
             items.append(SetupItem(
-                "takeover", "让 App 接管接收器", False, done, "已接管" if done else "可稍后",
+                "takeover", "让 App 接管接收器", False, done, status,
                 "不接管也能用基础按键；要读全部按键（含 # 号键）和遥控器麦克风，"
-                "在「添加遥控器」里选中接收器，点「让 App 接管这个接收器」。",
-                "去接管", lambda: navigate(ADD)))
+                "点右侧「让 App 接管这个接收器」（需管理员授权，随时可在「通用设置」恢复系统驱动）。",
+                action, run))
     elif platform.startswith("linux"):
         st = permissions.linux_access_status()
         done = st.get("udev_rule") == "已安装" and st.get("usb") in ("已授权", "已安装规则")
@@ -128,15 +155,105 @@ class SetupChecklist(QWidget):
         self.c = controller
         self.items: list[SetupItem] = []
         self.pills: dict[str, Pill] = {}
-        self.box = QVBoxLayout(self)
+        self._driver_pending = None
+        self._driver_paused = False
+        self._driver_timer = QTimer(self)
+        self._driver_timer.setInterval(250)
+        self._driver_timer.timeout.connect(self._poll_windows_takeover)
+        self._outer = QVBoxLayout(self)
+        self._outer.setContentsMargins(0, 0, 0, 0)
+        self._outer.setSpacing(8)
+        self._cards_host = QWidget(self)
+        self.box = QVBoxLayout(self._cards_host)
         self.box.setContentsMargins(0, 0, 0, 0)
         self.box.setSpacing(8)
+        self._outer.addWidget(self._cards_host)
+        self.feedback = label("", "caption")
+        self.feedback.hide()
+        self._outer.addWidget(self.feedback)
         self.timer = QTimer(self)
         self.timer.setInterval(1500)
         self.timer.timeout.connect(self.refresh)
         controller.device_changed.connect(self.refresh)
         controller.voice_changed.connect(self.refresh)
         self.refresh()
+
+    def _set_feedback(self, text: str):
+        self.feedback.setText(text)
+        self.feedback.setVisible(bool(text))
+
+    def _start_windows_takeover(self):
+        if self._driver_pending is not None:
+            return
+        from .. import win_usb_driver
+
+        ifaces = _windows_0416_interfaces()
+        if not ifaces:
+            msg = "未检测到已插入的 0416:0602 USB 接收器。请插好接收器后再试。"
+            self._set_feedback(msg)
+            self.c.fail(msg)
+            return
+        targets = [d.instance_id for d in ifaces if not d.bound_winusb]
+        if not targets:
+            self.refresh()
+            self.c.retry_connection()
+            msg = "这个接收器已由 App 接管。"
+            self._set_feedback(msg)
+            self.c.tell(msg)
+            return
+        paused = False
+        pause_fn = getattr(self.c, "pause_remote_input", None)
+        if callable(pause_fn):
+            paused = bool(pause_fn())
+        try:
+            handle, result_path = win_usb_driver.launch_elevated_action("bind", targets, confirm=False)
+        except win_usb_driver.DriverActionCancelled as exc:
+            if paused:
+                self.c.resume_remote_input()
+            self._set_feedback(str(exc))
+            self.c.tell(str(exc))
+            return
+        except Exception as exc:
+            if paused:
+                self.c.resume_remote_input()
+            self._set_feedback(str(exc))
+            self.c.fail(str(exc))
+            return
+        self._driver_paused = paused
+        self._driver_pending = (handle, result_path)
+        msg = "正在让 App 接管这个接收器，请在弹出的系统确认框中点「是」…"
+        self._set_feedback(msg)
+        self.c.tell(msg)
+        self.refresh()
+        self._driver_timer.start()
+
+    def _poll_windows_takeover(self):
+        if self._driver_pending is None:
+            self._driver_timer.stop()
+            return
+        from .. import win_usb_driver
+
+        handle, result_path = self._driver_pending
+        done, exit_code = win_usb_driver.poll_elevated_process(handle)
+        if not done:
+            return
+        self._driver_timer.stop()
+        self._driver_pending = None
+        paused = self._driver_paused
+        self._driver_paused = False
+        result = win_usb_driver.read_action_result(result_path, exit_code)
+        if paused:
+            self.c.resume_remote_input()
+        self.c.retry_connection()
+        self.refresh()
+        if result.get("ok"):
+            msg = result.get("message") or "已由 App 接管这只接收器。如按键暂无响应，重新插拔一次接收器即可。"
+            self._set_feedback(msg)
+            self.c.tell(msg)
+        else:
+            err = result.get("error") or "接管接收器失败，请重试。"
+            self._set_feedback(err)
+            self.c.fail(err)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -148,9 +265,14 @@ class SetupChecklist(QWidget):
         super().hideEvent(event)
 
     def refresh(self):
-        items = setup_items(self.c, self.navigate.emit)
-        shape = [(i.key, i.action) for i in items]
-        if shape != [(i.key, i.action) for i in self.items]:
+        items = setup_items(
+            self.c,
+            self.navigate.emit,
+            run_takeover=self._start_windows_takeover,
+            takeover_busy=self._driver_pending is not None,
+        )
+        shape = [(i.key, i.action, i.run is not None) for i in items]
+        if shape != [(i.key, i.action, i.run is not None) for i in self.items]:
             self._rebuild(items)
         self.items = items
         for item in items:
@@ -160,6 +282,8 @@ class SetupChecklist(QWidget):
         while self.box.count():
             widget = self.box.takeAt(0).widget()
             if widget is not None:
+                widget.hide()
+                widget.setParent(None)
                 widget.deleteLater()
         self.pills.clear()
         for heading, group in (("必须完成", [i for i in items if i.required]),
@@ -183,8 +307,10 @@ class SetupChecklist(QWidget):
         pill = Pill(item.status)
         self.pills[item.key] = pill
         line.addWidget(pill)
-        if item.action and item.run is not None:
-            line.addWidget(button(item.action, item.run, "primary" if item.required else None))
+        if item.action:
+            btn = button(item.action, item.run or (lambda: None), "primary" if item.required else None)
+            btn.setEnabled(item.run is not None)
+            line.addWidget(btn)
         box.addLayout(line)
         box.addWidget(label(item.detail, "caption"))
         return card

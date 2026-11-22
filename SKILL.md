@@ -2,7 +2,7 @@
 name: 10remotehub-setup
 description: 引导用户在 macOS 或 Windows 安装和使用 10RemoteHub，或在源码开发版添加陌生 USB／蓝牙遥控器。按设备发现、按键学习、映射、语音触发和私有音频逐步排查，用于指导用户与 AI 协作验证和开发适配。
 metadata:
-  release-version: 0.3.0
+  release-version: 0.3.1
   project: https://github.com/yizhixiaoheigou/10RemoteHub
   releases: https://github.com/yizhixiaoheigou/10RemoteHub/releases
 ---
@@ -27,7 +27,7 @@ metadata:
      （Windows PowerShell 可用：`Invoke-RestMethod -Headers @{"Cache-Control"="no-cache"} -Uri "https://raw.githubusercontent.com/yizhixiaoheigou/10RemoteHub/main/SKILL.md?t=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"`）
    - 开始安装前，顺手通过 GitHub Releases 页面或 API（`https://api.github.com/repos/yizhixiaoheigou/10RemoteHub/releases/latest`）核对最新正式版本号与当前安装包文件名。
 2. **如果你是纯对话型 AI（如豆包、DeepSeek 网页版或 App）**：
-   - 请核对当前读取到的这份指南版本（`v0.3.0`）与项目 [Releases 页面](https://github.com/yizhixiaoheigou/10RemoteHub/releases) 最新版本是否一致。
+   - 请核对当前读取到的这份指南版本（`v0.3.1`）与项目 [Releases 页面](https://github.com/yizhixiaoheigou/10RemoteHub/releases) 最新版本是否一致。
    - **如果你无法访问 GitHub 链接、只读到了网页片段或怀疑读到旧缓存**：请直接如实告诉用户，请用户打开 GitHub 上的 `SKILL.md` 页面全选复制原文发给你；**绝不要凭旧记忆或猜测编造安装步骤**。
 
 ### 0.2 先确认硬件、系统和用户想用的能力
@@ -120,7 +120,7 @@ metadata:
 
 为什么要做这一步：仅对配套 `0416:0602` 复合 USB 接收器需要把 **Interface 3** 和 **Interface 4** 交给 WinUSB 独占读取——尤其 **Interface 4 是全新安装时学全 `0416:0602` 按键的前提**（未绑 Interface 4 的 Raw Input 降级路径**收不到 `#` 号键**）。优先在添加窗口选中接收器点「让 App 接管这个接收器」：App 按接口用途自动选出要接管的接口（键盘、媒体键、厂商私有数据；不碰鼠标、标准声卡），切换为系统自带的 WinUSB（需管理员授权；非 `0416:0602` 接收器接管后 15 秒内需点「保留接管」，否则自动恢复），可随时「恢复系统驱动」；**Interface 3** 负责遥控器麦克风。**详细离线步骤也可直接在软件内点「配套接收器驱动说明 / 查看驱动说明」弹窗查看。**
 
-**推荐做法（一键接管）**：插上接收器 → 「添加遥控器」选中 `0416:0602` → 点「让 App 接管这个接收器」→ 管理员确认点「是」→ 重新插拔一次接收器 → 跳到下面第 7 步核对。
+**推荐做法（一键接管）**：插上接收器 → 在「添加遥控器」选中 `0416:0602`（或已添加后在「完成设置」清单 /「通用设置 → 设备连接」）→ 点「让 App 接管这个接收器」→ 管理员确认点「是」→ 如按键暂无响应重新插拔一次接收器 → 跳到下面第 7 步核对。
 
 **备选做法（一键接管失败时，用 Zadig 手动绑定）**，引导用户严格按以下顺序操作：
 1. 插上遥控器随附的 USB 接收器。
@@ -135,10 +135,9 @@ metadata:
    - 右侧目标驱动选择 **`WinUSB`**。
    - 点击 **`Replace Driver`**，等待提示安装成功。
 6. ⚠️ **必须重新插拔一次 USB 接收器**（拔下来等 2 秒再插回去）。
-7. 回到 10RemoteHub → **「通用设置」** → 点击 **「重新检查权限与连接」**，核对以下三项：
-   - **Interface 3（语音流与控制）**：显示 **已绑定**
-   - **Interface 4（独占按键与 # 号键）**：显示 **已绑定**
-   - 左侧设备栏出现 `USB 0416:0602`
+7. 回到 10RemoteHub → **「通用设置 → 设备连接」** → 点击 **「重新检查权限与连接」**，核对：
+   - **由 App 接管的接收器**中 `USB 0416:0602` 显示 **已接管**（如显示「未接管」或「部分接管」，直接点「让 App 接管这个接收器」）
+   - 设备连接状态显示 **已连接**，左侧遥控器卡片状态正常
 8. **阶段验收（先测按键）**：回到「添加遥控器」完成 `0416:0602` 照片学键（至少学会 `1`、`#`、`上`、`确定`、`返回`、`音量＋`；语音键只在照片上标位置不按，保存后在「语音设置」单测）；保存后按遥控器任意普通键，右侧界面对应按键会高亮且不干扰系统。
 
 > 注：只换 Interface 3 和 Interface 4，**不要乱改其他鼠标键盘或未知 USB 设备**；若日后想恢复系统默认驱动，按第 5 节卸载说明恢复即可。

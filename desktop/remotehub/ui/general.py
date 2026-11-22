@@ -59,15 +59,17 @@ class GeneralPage(QWidget):
         elif sys.platform == "win32":
             from PySide6.QtCore import QTimer
             self._win_driver_pending = None
+            self._win_driver_paused = False
+            self._win_confirm_box = None
             self._win_driver_timer = QTimer(self)
             self._win_driver_timer.setInterval(250)
             self._win_driver_timer.timeout.connect(self._poll_win_binding)
-            # Receivers the app reads itself (WinUSB takeover). Taking one over happens in
-            # 「添加遥控器」, on the USB device the user picks; here they can be given back.
+            # Receivers the app reads itself (WinUSB takeover): current remote's USB receiver
+            # can be taken over right here or in 「添加遥控器」, and any bound one restored here.
             box.addWidget(label("由 App 接管的接收器", "value"))
             box.addWidget(label(
-                "接管后，这只接收器只由 App 读取：App 没有运行时它不能用。点「恢复系统驱动」即可还原为普通设备。"
-                "要接管新的接收器，在「添加遥控器」里选中它，点「让 App 接管这个接收器」。", "caption"))
+                "接管后，这只接收器只由 App 读取（可完整读取 # 号键与遥控器麦克风；App 没有运行时它不能用）。"
+                "可以直接在这里或「添加遥控器」点「让 App 接管这个接收器」，随时点「恢复系统驱动」还原。", "caption"))
             self.takeover_rows = QWidget()
             self.takeover_layout = QVBoxLayout(self.takeover_rows)
             self.takeover_layout.setContentsMargins(0, 0, 0, 0)
@@ -172,6 +174,7 @@ class GeneralPage(QWidget):
         steps.addWidget(card)
 
         controller.device_changed.connect(self.refresh)
+        controller.remotes_changed.connect(self.refresh_takeovers)
         controller.permission_opened.connect(self.show_permission_overlay)
         self.refresh()
         self.refresh_autostart()
@@ -192,6 +195,7 @@ class GeneralPage(QWidget):
         self.refresh_permissions()
         self.refresh_autostart()
         self.refresh_helper()
+        self.refresh_takeovers()
         self.refresh_linux_udev()
 
     def refresh(self):
@@ -269,23 +273,80 @@ class GeneralPage(QWidget):
                 "安装一次 udev 规则（TAG+=\"uaccess\"）即可免 root 读取遥控器全部按键与语音，并在 Wayland 下启用 /dev/uinput。"
             )
 
-    def _start_win_binding(self, action: str, instance_ids: list[str]):
+    def _start_win_binding(self, action: str, instance_ids: list[str], *, confirm: bool = False):
         if getattr(self, "_win_driver_pending", None) is not None:
             return
         from .. import win_usb_driver
+        paused = False
+        pause_fn = getattr(self.c, "pause_remote_input", None)
+        if callable(pause_fn):
+            paused = bool(pause_fn())
         try:
-            handle, result_path = win_usb_driver.launch_elevated_action(action, instance_ids)
+            handle, result_path = win_usb_driver.launch_elevated_action(action, instance_ids, confirm=confirm)
         except win_usb_driver.DriverActionCancelled as exc:
+            if paused:
+                self.c.resume_remote_input()
             self.c.tell(str(exc))
             return
         except Exception as exc:
+            if paused:
+                self.c.resume_remote_input()
             self.c.fail(str(exc))
             return
+        self._win_driver_paused = paused
         self._win_driver_pending = (handle, result_path, action)
         for control in self.takeover_buttons:
             control.setEnabled(False)
-        self.c.tell("正在恢复系统驱动，请在弹出的系统确认框中点「是」…")
+        self.c.tell(
+            "正在让 App 接管这个接收器，请在弹出的系统确认框中点「是」…"
+            if action == "bind"
+            else "正在恢复系统驱动，请在弹出的系统确认框中点「是」…"
+        )
         self._win_driver_timer.start()
+
+    def _ask_keep_takeover(self, result_path):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QMessageBox
+        from .. import win_usb_driver
+
+        box = QMessageBox(self)
+        box.setWindowTitle("确认接管")
+        box.setIcon(QMessageBox.Icon.Question)
+        keep = box.addButton("保留接管", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("恢复系统驱动", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        left = [15]
+
+        def tick():
+            box.setText(
+                "App 已接管这个接收器。键盘和鼠标都还正常吗？\n"
+                f"点「保留接管」完成；{left[0]} 秒内不点会自动恢复系统驱动。"
+            )
+            left[0] -= 1
+            if left[0] < 0:
+                box.done(0)
+
+        timer = QTimer(box)
+        timer.timeout.connect(tick)
+        tick()
+        timer.start(1000)
+
+        def answered(_result):
+            timer.stop()
+            clicked = box.clickedButton()
+            if clicked is not None:
+                win_usb_driver.answer_confirmation(result_path, keep=clicked is keep)
+            self._win_confirm_box = None
+
+        box.finished.connect(answered)
+        self._win_confirm_box = box
+        box.open()
+
+    def _close_win_confirm_box(self):
+        box = getattr(self, "_win_confirm_box", None)
+        if box is not None:
+            box.done(0)
+            self._win_confirm_box = None
 
     def _poll_win_binding(self):
         pending = getattr(self, "_win_driver_pending", None)
@@ -296,10 +357,18 @@ class GeneralPage(QWidget):
         handle, result_path, _action = pending
         done, exit_code = win_usb_driver.poll_elevated_process(handle)
         if not done:
+            if (getattr(self, "_win_confirm_box", None) is None
+                    and win_usb_driver.read_action_stage(result_path).get("stage") == "awaiting_confirm"):
+                self._ask_keep_takeover(result_path)
             return
         self._win_driver_timer.stop()
         self._win_driver_pending = None
+        self._close_win_confirm_box()
+        paused = getattr(self, "_win_driver_paused", False)
+        self._win_driver_paused = False
         result = win_usb_driver.read_action_result(result_path, exit_code)
+        if paused:
+            self.c.resume_remote_input()
         self.refresh_takeovers()
         self.c.retry_connection()
         if result.get("ok"):
@@ -307,16 +376,44 @@ class GeneralPage(QWidget):
         else:
             self.c.fail(result.get("error") or "驱动切换失败。")
 
-    def taken_over(self):
-        """``{(vendor, product): (name, [restorable interfaces])}`` of receivers bound to WinUSB."""
+    def _current_usb_pairs(self) -> set[tuple[int, int]]:
+        pairs: set[tuple[int, int]] = set()
+        if getattr(self.c, "uses_receiver", False):
+            pairs.add((0x0416, 0x0602))
+        remote = getattr(self.c, "remote", None)
+        if remote is not None:
+            for conn in getattr(remote, "connections", ()) or ():
+                if getattr(conn, "transport", "") == "USB" and getattr(conn, "vendor", 0) and getattr(conn, "product", 0):
+                    pairs.add((int(conn.vendor), int(conn.product)))
+        return pairs
+
+    def _receiver_groups(self):
+        """``{(vendor, product): (name, [all managed interfaces])}`` for present USB receivers."""
         from .. import win_usb_driver
 
         groups = {}
         _, receivers = win_usb_driver.list_managed_devices()
         for item in receivers:
-            if item.restorable:
-                groups.setdefault((item.vendor, item.product), (item.name, []))[1].append(item)
+            groups.setdefault((item.vendor, item.product), (item.name, []))[1].append(item)
         return groups
+
+    def taken_over(self):
+        """``{(vendor, product): (name, [restorable interfaces])}`` of receivers bound to WinUSB."""
+        groups = {}
+        for pair, (name, items) in self._receiver_groups().items():
+            restorable = [item for item in items if item.restorable]
+            if restorable:
+                groups[pair] = (name, restorable)
+        return groups
+
+    def bind_receiver(self, pair):
+        group = self._receiver_groups().get(pair)
+        targets = [d.instance_id for d in (group[1] if group else ()) if not d.bound_winusb]
+        if not targets:
+            self.c.tell("这个接收器已由 App 接管。")
+            self.refresh_takeovers()
+            return
+        self._start_win_binding("bind", targets, confirm=(pair != (0x0416, 0x0602)))
 
     def restore_receiver(self, pair):
         group = self.taken_over().get(pair)
@@ -331,19 +428,38 @@ class GeneralPage(QWidget):
             return
         while self.takeover_layout.count():
             item = self.takeover_layout.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
         self.takeover_buttons = []
-        groups = self.taken_over()
+        all_groups = self._receiver_groups()
+        current_pairs = self._current_usb_pairs()
         busy = getattr(self, "_win_driver_pending", None) is not None
-        for (vendor, product), (name, _items) in sorted(groups.items()):
-            restore = button("恢复系统驱动", lambda _=False, pair=(vendor, product): self.restore_receiver(pair))
-            restore.setEnabled(not busy)
-            self.takeover_buttons.append(restore)
-            text = label(f"USB {vendor:04X}:{product:04X} · 已接管", wrap=False)
+        shown = 0
+        for (vendor, product), (name, items) in sorted(all_groups.items()):
+            restorable = [d for d in items if d.restorable]
+            unbound = [d for d in items if not d.bound_winusb]
+            if not restorable and (vendor, product) not in current_pairs:
+                continue
+            shown += 1
+            controls = []
+            if unbound:
+                bind_btn = button("让 App 接管这个接收器", lambda _=False, pair=(vendor, product): self.bind_receiver(pair))
+                bind_btn.setEnabled(not busy)
+                self.takeover_buttons.append(bind_btn)
+                controls.append(bind_btn)
+            if restorable:
+                restore = button("恢复系统驱动", lambda _=False, pair=(vendor, product): self.restore_receiver(pair))
+                restore.setEnabled(not busy)
+                self.takeover_buttons.append(restore)
+                controls.append(restore)
+            state = "部分接管" if (restorable and unbound) else ("已接管" if restorable else "未接管")
+            text = label(f"USB {vendor:04X}:{product:04X} · {state}", wrap=False)
             text.setToolTip(name)
-            self.takeover_layout.addWidget(row(text, None, restore, spacing=8))
-        self.takeover_empty.setVisible(not groups)
+            self.takeover_layout.addWidget(row(text, None, *controls, spacing=8))
+        self.takeover_empty.setVisible(shown == 0)
 
     def install_helper(self, remove=False):
         if remove:

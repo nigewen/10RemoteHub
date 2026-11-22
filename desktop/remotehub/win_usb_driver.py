@@ -36,6 +36,7 @@ _RESTORABLE_SERVICES = frozenset({"winusb", "libusbk", "libusb0"})
 _SAFE_OEM_DELETE_CLASSES = frozenset({"usbdevice", "libusbk devices", "libusb-win32 devices"})
 _OEM_INF_RE = re.compile(r"^oem\d+\.inf$", re.IGNORECASE)
 _MI_RE = re.compile(r"&MI_([0-9A-F]{2})", re.IGNORECASE)
+_USB_VID_PID_RE = re.compile(r"^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(?:&[^\\]*)?\\", re.IGNORECASE)
 
 ERROR_CANCELLED = 1223
 KEYBOARD_CLASS_GUID = "{4d36e96b-e325-11ce-bfc1-08002be10318}"
@@ -86,13 +87,19 @@ def _parse_interface_number(instance_id: str) -> int | None:
     return int(match.group(1), 16) if match else None
 
 
+def _parse_usb_vid_pid(instance_id: str) -> tuple[int, int] | None:
+    """Parse ``(vendor, product)`` from any USB devnode, including composite ``&MI_XX`` interfaces."""
+    match = _USB_VID_PID_RE.match(instance_id or "")
+    return (int(match.group(1), 16), int(match.group(2), 16)) if match else None
+
+
 def _list_present_usb_nodes_windows() -> list[dict]:
     """Read present Windows USB devnodes via cfgmgr32 (read-only, no elevation)."""
     if sys.platform != "win32":
         return []
     try:
         import ctypes as c
-        from .windows_probe_metadata import WindowsProbeMetadata, _usb_pair
+        from .windows_probe_metadata import WindowsProbeMetadata
 
         meta = WindowsProbeMetadata()
         flags = 0x101  # CM_GETIDLIST_FILTER_ENUMERATOR | CM_GETIDLIST_FILTER_PRESENT
@@ -106,7 +113,7 @@ def _list_present_usb_nodes_windows() -> list[dict]:
         for inst in buf[:].split("\0"):
             if not inst:
                 continue
-            pair = _usb_pair(inst)
+            pair = _parse_usb_vid_pid(inst)
             if pair is None:
                 continue
             node = meta._node(inst)
@@ -124,10 +131,13 @@ def _list_present_usb_nodes_windows() -> list[dict]:
             for _ in range(32):
                 if child is None:
                     break
+                child_hw = meta._node_property(child, "a45c254e-df1c-4efd-8020-67d146a850e0", 3, 0x2012).decode(
+                    "utf-16-le", errors="replace"
+                )
                 child_compat = meta._node_property(child, "a45c254e-df1c-4efd-8020-67d146a850e0", 4, 0x2012).decode(
                     "utf-16-le", errors="replace"
                 )
-                usages.extend(hid_usages_from_ids(child_compat))
+                usages.extend(hid_usages_from_ids(child_hw + "\0" + child_compat))
                 child = meta._relate(meta.cfg.CM_Get_Sibling, child)
             rows.append(
                 {
@@ -139,7 +149,7 @@ def _list_present_usb_nodes_windows() -> list[dict]:
                     "driver_inf": driver_inf,
                     "compat": compat,
                     "name": name,
-                    "hid_usages": usages,
+                    "hid_usages": sorted(set(usages)),
                 }
             )
         return rows
@@ -322,7 +332,7 @@ def _list_present_keyboards_windows() -> list[str]:
 
 def check_keyboard_remains(targets: Iterable[ManagedUSBDevice], keyboards: Iterable[str]) -> None:
     """Refuse a takeover that would leave the computer without any other keyboard."""
-    pairs = {(d.vendor, d.product) for d in targets if d.kind != "ble_dongle"}
+    pairs = {(d.vendor, d.product) for d in targets if d.kind not in ("ble_dongle", "receiver_0416")}
     if not pairs:
         return
     own = [f"VID_{v:04X}&PID_{p:04X}" for v, p in pairs]

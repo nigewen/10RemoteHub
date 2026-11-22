@@ -117,3 +117,60 @@ def test_items_that_point_elsewhere_close_the_dialog_and_open_that_page(qtbot, t
     assert w.setup_dialog is None
     assert w.stack.currentIndex() == w.pages.index(w.voice_page)
     w.shutdown()
+
+
+def test_windows_checklist_and_general_takeover_run_directly_without_looping_to_add_dialog(qtbot, tmp_path, monkeypatch):
+    """Clicking takeover in Windows setup checklist runs WinUSB bind in place (no ADD loop)."""
+    from remotehub import win_usb_driver as drv
+    from remotehub.ui import general as general_module
+
+    monkeypatch.setattr(checklist_module.sys, "platform", "win32")
+    monkeypatch.setattr(general_module.sys, "platform", "win32")
+    _mic(monkeypatch, False)
+
+    state = {"bound": False}
+
+    def fake_list():
+        svc = "WinUSB" if state["bound"] else "HidUsb"
+        return [], [
+            drv.ManagedUSBDevice(r"USB\VID_0416&PID_0602&MI_03\7&1&0&0003", 0x0416, 0x0602, "receiver_0416", svc, "Voice", interface=3),
+            drv.ManagedUSBDevice(r"USB\VID_0416&PID_0602&MI_04\7&1&0&0004", 0x0416, 0x0602, "receiver_0416", svc, "Keys", interface=4),
+        ]
+
+    monkeypatch.setattr(drv, "list_managed_devices", fake_list)
+    launched = []
+    monkeypatch.setattr(drv, "launch_elevated_action",
+                        lambda action, ids, **kw: launched.append((action, list(ids), kw)) or (42, tmp_path / "res.json"))
+    poll_done = {"done": False}
+    monkeypatch.setattr(drv, "poll_elevated_process", lambda _h: (poll_done["done"], 0))
+    monkeypatch.setattr(drv, "read_action_result", lambda _p, _c=0: {"ok": True, "message": "已由 App 接管这只接收器。"})
+
+    w = _window(qtbot, tmp_path)
+    # 1. GeneralPage shows direct takeover button for current unbound 0416:0602 receiver.
+    w.general.refresh_takeovers()
+    assert [b.text() for b in w.general.takeover_buttons] == ["让 App 接管这个接收器"]
+
+    # 2. SetupDialog checklist executes takeover in place without ever navigating to ADD.
+    dialog = w.open_setup(force=True)
+    navigated = []
+    dialog.navigate.connect(navigated.append)
+    btn = next(b for b in dialog.checklist.findChildren(QPushButton) if b.text() == "让 App 接管这个接收器")
+    btn.click()
+    assert navigated == []
+    assert w.add_dialog is None
+    assert launched == [(
+        "bind",
+        [r"USB\VID_0416&PID_0602&MI_03\7&1&0&0003", r"USB\VID_0416&PID_0602&MI_04\7&1&0&0004"],
+        {"confirm": False},
+    )]
+    assert dialog.checklist.pills["takeover"].text() == "正在接管…"
+
+    # 3. Once elevated helper completes, checklist updates to 已接管 and GeneralPage switches to 恢复系统驱动.
+    state["bound"] = True
+    poll_done["done"] = True
+    dialog.checklist._poll_windows_takeover()
+    assert dialog.checklist.pills["takeover"].text() == "已接管"
+    assert not any(b.text() == "让 App 接管这个接收器" for b in dialog.checklist.findChildren(QPushButton))
+    w.general.refresh_takeovers()
+    assert [b.text() for b in w.general.takeover_buttons] == ["恢复系统驱动"]
+    w.shutdown()
