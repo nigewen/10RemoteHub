@@ -1,5 +1,13 @@
 # 10RemoteHub
 
+## 本分支的 Windows 遥控器适配
+
+本分支基于 [yizhixiaoheigou/10RemoteHub](https://github.com/yizhixiaoheigou/10RemoteHub)，补充了一类使用 `0416:0602` USB 接收器的遥控器在 Windows 上的语音支持。补丁识别接口 3 的 `0x82` 读端点和 `0x03` 写端点，并适配录音启动流程和音频包序号校验。
+
+本地适配版已在 Windows 实机跑通按键映射和遥控器麦克风听写。配合 VB-CABLE 和微信输入法，按住遥控器话筒键说话，松开即可结束听写并上屏。发布在本分支的源码通过了录音启动和音频包序号的模拟检查。使用同一 USB 设备 ID 的其他接收器批次需要按实物验证。
+
+[查看适配补丁](https://github.com/nigewen/10RemoteHub/commit/b8939f9fb15ba345fe4fe40ddc235110beaa64dc) · [Windows 安装与语音配置](desktop/INSTALL-Windows.md)
+
 把电视遥控器变成 **macOS / Windows** 上的按键面板、九键输入与语音入口：配套 `USB 0416:0602`、系统识别为 HID 键盘／媒体键的 USB 与蓝牙遥控器，以及经外接 USB 蓝牙棒直连的 BLE 语音遥控器。
 
 - **协议优先，一条接入路径**：在「我的遥控器 → 添加遥控器」试按一次，App 用大白话告诉你这只遥控器属于哪一档（✅ 直接接入 / 🔧 点一下就能接入 / ⚠️ 目前无法自动接入 / ❓ 看不到设备）。随后导入你手里这只遥控器的正面照片，逐个点按键位置并按实体键学习。不限外观和键数，同一只遥控器可同时绑定 USB 接收器和蓝牙。
