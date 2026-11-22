@@ -159,9 +159,12 @@ class WindowsCollector(QObject):
         vanish. A dedicated blocking read per interface cannot miss one.
         """
         import usb.core
+        # WinUSB can fill a large read with several 9-byte reports from this
+        # keyboard pipe. HIDReports.decode() consumes just one report.
+        read_size = 9 if endpoint.bEndpointAddress == 0x84 and endpoint.wMaxPacketSize == 9 else 64
         while not (self.halt.is_set() or stop.is_set()):
             try:
-                report = bytes(endpoint.read(64, timeout=200))
+                report = bytes(endpoint.read(read_size, timeout=200))
             except usb.core.USBTimeoutError:
                 continue
             except Exception as exc:
